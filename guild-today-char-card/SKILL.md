@@ -1,3 +1,8 @@
+---
+name: guild-today-char-card
+description: "Create, supplement, modify, and review formal character cards for 《今日公会照常营业》 using the project's current truth sources, character-card field rules, and design-purpose-first workflow."
+---
+
 # guild-today-char-card
 
 ## Purpose
