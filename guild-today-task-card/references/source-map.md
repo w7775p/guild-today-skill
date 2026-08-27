@@ -58,6 +58,10 @@ URL：
 
 `references/task-card-fields.md`
 
+字段使用方法与当前待同步事项读取：
+
+`references/task-field-guidance.md`
+
 需要确认最新字段、处理冲突或维护快照时读取当前 Notion 页面。
 
 ---
@@ -193,6 +197,10 @@ URL：
 ---
 
 # 8.报告与情报揭露系统
+
+URL：
+
+`https://app.notion.com/p/3ba7fb71ada481c1b4dcd96354435173`
 
 负责：
 
