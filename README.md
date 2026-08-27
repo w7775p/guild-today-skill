@@ -11,12 +11,21 @@ guild-today-skill/
 ├── README.md
 ├── guild-today-char-card/
 │   ├── SKILL.md
-│   └── references/
-│       ├── character-card-fields.md
-│       └── source-map.md
-└── future-skill/
+│   ├── assets/
+│   ├── references/
+│   │   ├── character-card-fields.md
+│   │   ├── regression-cases.md
+│   │   └── source-map.md
+│   ├── scripts/
+│   └── tests/
+└── guild-today-task-card/
     ├── SKILL.md
     └── references/
+        ├── role-task-mapping.md
+        ├── source-map.md
+        ├── task-card-fields.md
+        ├── task-design-context.md
+        └── task-field-guidance.md
 ```
 
 ## 目录约定
@@ -93,16 +102,6 @@ Skill 负责方法，正式真源负责项目事实。
 
 用于创建、补全、修改与审查正式角色卡。
 
-当前结构：
-
-```text
-guild-today-char-card/
-├── SKILL.md
-└── references/
-    ├── character-card-fields.md
-    └── source-map.md
-```
-
 核心方向：
 
 ```text
@@ -110,6 +109,20 @@ guild-today-char-card/
 ```
 
 角色字段日常工作优先读取随 Skill 保存的字段快照；需要确认最新口径、处理冲突、涉及尚未冻结规则或维护 reference 时，再读取 source map 指向的当前 Notion 真源。
+
+### guild-today-task-card
+
+用于创建、补全、修改与审查正式 Task，并把当前角色池差异转化为可理解的派遣判断、后台判定和 Result 交接。
+
+核心方向：
+
+```text
+任务设计上下文 → 角色映射 → Task → 后台判定 → Result 交接 → 资产依赖
+```
+
+Task 字段日常工作优先读取 `task-card-fields.md`；字段使用边界读取 `task-field-guidance.md`。Result、Event、Report、Time 与 Rules 的归属按 `source-map.md` 指向的当前 Notion 真源裁决。
+
+当前 Godot 垂直切片以一张真实任务的生成、派遣、判定、Result、结算与报告闭环为验证目标。暂不为完整性新增 Result / Event / Time Skill。
 
 ## 新增 Skill 的最小要求
 
