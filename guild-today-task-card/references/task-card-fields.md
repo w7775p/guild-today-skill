@@ -26,7 +26,7 @@ Source status:
 
 `字段审查`
 
-字段使用方法与待同步事项读取：
+字段使用方法与未冻结边界读取：
 
 `references/task-field-guidance.md`
 
