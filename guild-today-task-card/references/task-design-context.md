@@ -8,8 +8,6 @@
 
 `$task_design_purpose`
 
-其中 `$task_design_purpose` 始终表示当前 Task 的**任务设计目的**。
-
 ---
 
 # 1.$task_brief
@@ -23,9 +21,9 @@ task_count
 task_name
 task_concept
 task_design_purpose
-specified_characters
-preferred_character
-preferred_team
+focus_characters
+target_best_character
+target_best_team
 task_type
 location
 client
@@ -37,33 +35,52 @@ other_constraints
 
 只记录用户已经明确的信息。
 
-用户没有提供的部分由后续流程根据当前项目真源、当前角色池和 Task 字段口径完成。
+字段含义：
+
+`focus_characters`
+→ 用户希望当前 Task 重点考虑的人物。
+
+`target_best_character`
+→ 用户明确指定的最佳单角色答案。
+
+`target_best_team`
+→ 用户明确指定的最佳组合答案。
+
+其他约束按用户实际输入记录。
 
 ---
 
 # 2.$task_design_purpose
 
-`$task_design_purpose` 是当前 Task 最终采用的任务设计目的。
+`$task_design_purpose` 始终表示当前 Task 的**任务设计目的**。
 
-它回答：
+定义：
 
-> 这张任务希望玩家主要进行什么判断，并获得什么任务体验？
+> 当前 Task 主要承担或验证的设计作用。
 
-它用于指导：
-
-`任务概念`
-
-`角色池利用`
-
-`玩家信息`
+它可以涉及：
 
 `派遣判断`
 
-`后台判定`
+`角色认识`
 
-`Result 需求`
+`地区或世界表达`
 
-`最终验收`
+`关系展示`
+
+`任务结构验证`
+
+`系统玩法验证`
+
+`风险与资源取舍`
+
+`其他当前 Task 实际承担的设计作用`
+
+当任务设计目的涉及玩家决策时，同时明确：
+
+`玩家主要判断什么`
+
+`玩家预期获得什么任务体验`
 
 ---
 
@@ -75,7 +92,7 @@ other_constraints
 
 直接继承用户已经明确的任务设计目的。
 
-然后围绕该目的读取角色池、建立 `$role_task_map` 并完成 Task。
+后续角色池分析围绕该目的建立 `$role_task_map`。
 
 ---
 
@@ -83,41 +100,35 @@ other_constraints
 
 当 `$task_brief.task_design_purpose` 为空时：
 
-读取当前角色池，寻找能够形成实际派遣判断的人物差异。
-
-然后根据：
+结合：
 
 `$task_brief`
 
 `当前角色池`
 
-`当前项目阶段`
+`当前项目需求`
 
 确定 `$task_design_purpose`。
 
-执行关系：
-
-`$task_brief + 角色池分析 → $task_design_purpose`
-
-随后校准 `$role_task_map` 并继续 Task 设计。
+角色池驱动生成时，可以先寻找值得形成 Task 的人物差异，再确定任务设计目的。
 
 ---
 
 # 5.任务约束与任务设计目的
 
-任务名称、指定角色、最佳组合、地点、委托人、任务类型、风险方向等属于任务约束。
+任务名称、重点角色、目标最佳角色、目标最佳组合、地点、委托人、任务类型、风险方向等属于任务约束。
 
-任务设计目的负责定义玩家在这张 Task 中主要进行的判断与获得的体验。
+任务设计目的负责定义当前 Task 主要承担或验证的设计作用。
 
 例如：
 
 ```text
-$task_brief.preferred_team = 角色A + 角色B
+$task_brief.target_best_team = 角色A + 角色B
 ```
 
-表示用户已经指定一个优先组合。
+表示用户已经指定目标最佳组合。
 
-随后仍需根据正式角色事实确定：
+随后需要结合正式角色事实确定：
 
 `$task_design_purpose`
 
@@ -125,60 +136,13 @@ $task_brief.preferred_team = 角色A + 角色B
 
 ---
 
-# 6.常见输入模式
+# 6.默认输入处理
 
-## 6.1 用户提供较完整条件
+用户可以提供完整 Task 草案、部分条件、单一任务设计目的、指定角色或组合、任务数量，或只提出生成 Task 的要求。
 
-例如：
+用户未指定数量时：
 
-```text
-任务名称：XX
-任务设计目的：XXXX
-最佳组合：角色A + 角色B
-任务概念：XXXX
-```
-
-执行：
-
-`提取已明确条件 → 建立 $task_brief → 确定 $task_design_purpose → 读取角色池 → 完成 Task`
-
-## 6.2 用户只提供任务设计目的
-
-执行：
-
-`锁定 $task_design_purpose → 读取角色池 → 建立角色映射 → 完成 Task`
-
-## 6.3 用户只指定角色或组合
-
-执行：
-
-`写入 $task_brief → 读取指定角色与当前角色池 → 确定 $task_design_purpose → 完成 Task`
-
-## 6.4 用户要求角色池驱动生成
-
-例如：
-
-`根据角色池生成若干 Task`
-
-执行：
-
-`读取角色池 → 分析可形成的派遣判断 → 为每张 Task 确定 $task_design_purpose → 分别生成`
-
-## 6.5 用户只提出泛化生成要求
-
-例如：
-
-`生成一个 Task`
-
-执行：
-
-`读取当前项目真源 → 读取角色池 → 选择当前值得验证的人物差异 → 确定 $task_design_purpose → 生成 Task`
-
-用户未指定数量时，默认生成 1 张 Task。
-
----
-
-# 7.批量生成上下文
+`task_count = 1`
 
 用户要求多张 Task 时，为每张 Task 分别建立：
 
@@ -188,22 +152,4 @@ $task_brief.preferred_team = 角色A + 角色B
 
 `$role_task_map`
 
-每张 Task 的核心派遣判断应清楚。
-
-多张 Task 可以从能力、人物行为、关系、状态、信息结构、风险结构、任务目标或其他真实角色差异中形成不同设计。
-
----
-
-# 8.任务设计目的的验收
-
-检查：
-
-①任务设计目的是否具体到玩家判断与任务体验。
-
-②任务设计目的是否能够由当前角色池和 Task 结构实际实现。
-
-③玩家信息是否支持该判断。
-
-④后台判定与 Result 是否能够反馈该判断。
-
-⑤用户已经明确的任务设计目的是否被完整继承。
+完整执行顺序由 `SKILL.md` 维护。
