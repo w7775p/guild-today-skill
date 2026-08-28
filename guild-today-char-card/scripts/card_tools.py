@@ -17,6 +17,8 @@ MODULES = (
     "里档案", "本色与任务行为", "关系与成长", "任务复用接口", "设计说明",
 )
 STATS = ("战斗", "调查", "交涉", "冒险者等级", "声望")
+UNCONFIRMED = {"待定", "未设定", "占位"}
+FACET_FIELDS = ("公开特质", "弱线索")
 
 
 @dataclass
@@ -203,15 +205,92 @@ def expected_stat(name, value, stat_map):
     return stat_map[name][str(number)]
 
 
-def card_id(text):
-    for table in tables(text):
+def unconfirmed(value, placeholders=()):
+    value = plain(value)
+    without_marker = re.sub(r"（推测）[。.]?$", "", value).strip()
+    return without_marker in UNCONFIRMED or value in set(map(plain, placeholders))
+
+
+def facet_errors(key, value, placeholders=()):
+    """Count explicit entries only; distinct meaning still needs prose review."""
+    if key not in FACET_FIELDS:
+        return []
+    value = re.sub(r"<br\s*/?>", "\n", plain(value), flags=re.I)
+    if key == "弱线索" and value == "暂无":
+        return []
+    markers = list(re.finditer(r"[①-⑳]|^(?:\d+[.、)）]\s*|[-+*]\s+)", value, flags=re.M))
+    if markers:
+        ends = [marker.start() for marker in markers[1:]] + [len(value)]
+        entries = [value[marker.end():end].strip() for marker, end in zip(markers, ends)]
+    else:
+        entries = [value]
+    entries = [entry for entry in entries if entry and entry != "暂无" and not unconfirmed(entry, placeholders)]
+    errors = []
+    if not 2 <= len(entries) <= 4:
+        errors.append(f"{key}须有2—4条独立内容，当前{len(entries)}条；单条视为失败")
+    if len(set(entries)) != len(entries):
+        errors.append(key + "存在完全重复条目，不能凑数；请审查人物侧面的独立性")
+    return errors
+
+
+def prose_fields(text, parsed=None):
+    parsed = tables(text) if parsed is None else parsed
+    outside, cursor = [], 0
+    for table in parsed:
+        outside.append(text[cursor:table.start])
+        cursor = table.end
+    outside.append(text[cursor:])
+    fence, pending, content = None, None, []
+    # A removed table remains a boundary for any preceding prose field.
+    for line in "\n---\n".join(outside).splitlines():
+        marker = re.match(r"^\s*(\x60{3,}|~{3,})", line)
+        if marker:
+            run = marker.group(1)
+            if fence is None:
+                fence = (run[0], len(run))
+            elif run[0] == fence[0] and len(run) >= fence[1]:
+                fence = None
+            continue
+        if fence:
+            continue
+        match = re.match(r"^\*\*([^：:*]+)(?:[：:]\*\*|\*\*[：:])\s*(.*)$", line)
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
+        facet_label = re.fullmatch(r"\*\*(公开特质|弱线索)\*\*\s*", line)
+        boundary = match or heading or facet_label or re.fullmatch(r"\s*(?:---+|\*\*\*+|___+)\s*", line)
+        if pending and boundary:
+            yield pending, "\n".join(content)
+            pending, content = None, []
+        if match:
+            key, value = match.groups()
+        elif facet_label:
+            key, value = facet_label.group(1), ""
+        elif heading and plain(heading.group(1)).rstrip("：:") in FACET_FIELDS:
+            key, value = plain(heading.group(1)).rstrip("：:"), ""
+        else:
+            if pending:
+                content.append(line)
+            continue
+        if key in FACET_FIELDS:
+            pending, content = key, [value]
+        else:
+            yield "状态" if key == "初始状态" else key, value
+    if pending:
+        yield pending, "\n".join(content)
+
+
+def card_id(text, parsed=None):
+    parsed = tables(text) if parsed is None else parsed
+    for table in parsed:
         for row in table.rows[1:]:
             if plain(row[0]) == "角色ID" and len(row) == 2:
                 return plain(row[1])
+    for key, value in prose_fields(text, parsed):
+        if key == "角色ID":
+            return plain(value)
     return None
 
 
-def check(text, fields_text, partial=False, pool=()):
+def check(text, fields_text, partial=False, pool=(), preserve_layout=False, placeholders=()):
     required, stat_map = schema(fields_text)
     errors, warnings, seen = [], [], Counter()
     parsed = tables(text)
@@ -224,6 +303,13 @@ def check(text, fields_text, partial=False, pool=()):
                 seen[key] += 1
                 if len(row) < 2 or not plain(row[1]):
                     errors.append(key + "内容为空")
+                elif key not in STATS and unconfirmed(row[1], placeholders):
+                    warnings.append(key + "尚未确认")
+            if key in FACET_FIELDS:
+                if len(row) != 2:
+                    errors.append(key + "的条目数量校验仅支持两列表格，请人工核对")
+                else:
+                    errors.extend(facet_errors(key, row[1], placeholders))
             if key in STATS:
                 if len(row) != 4:
                     errors.append(key + "须包含数值、简要描述、详细描述")
@@ -231,29 +317,36 @@ def check(text, fields_text, partial=False, pool=()):
                 try:
                     expected = expected_stat(key, row[1], stat_map)
                 except ValueError as exc:
-                    if re.search(r"待定|占位", row[1]):
+                    if unconfirmed(row[1], placeholders):
                         warnings.append(key + "尚未确认")
                     else:
                         errors.append(str(exc))
                     continue
                 if tuple(map(plain, row[2:])) != expected:
                     errors.append(key + "描述与字段原文不一致")
-    # Support explicit prose labels without pretending to understand prose.
-    for line in text.splitlines():
-        match = re.match(r"^\*\*([^：:*]+)[：:]", line)
-        if match and match.group(1) in required and not seen[match.group(1)]:
-            seen[match.group(1)] = 1
+    # Explicit prose fields get presence checks; stat prose is not silently accepted.
+    for key, value in prose_fields(text, parsed):
+        if key in required:
+            seen[key] += 1
+            if not plain(value):
+                errors.append(key + "内容为空")
+            elif unconfirmed(value, placeholders):
+                warnings.append(key + "尚未确认")
+        if key in STATS:
+            errors.append(key + "的文字标签格式未覆盖；数值与原文校验仅支持四列表格，请人工核对")
+        errors.extend(facet_errors(key, value, placeholders))
     for key, count in seen.items():
         if count > 1:
             errors.append(key + "重复出现，请核对主要定义")
     if not partial:
         for key in sorted(required - set(seen)):
             errors.append("缺少必填字段：" + key)
+    if not partial and not preserve_layout:
         headings = re.findall(r"^#{1,3} (\d+)\.\s*(.+?)\s*$", text, flags=re.M)
         expected_headings = [(str(i), title) for i, title in enumerate(MODULES, 1)]
         if headings != expected_headings:
             errors.append("完整新卡的十模块标题或顺序不符")
-    identity = card_id(text)
+    identity = card_id(text, parsed)
     if identity is not None:
         if not ID_RE.fullmatch(identity) or identity in {"hero_xxx", "hero_placeholder"}:
             errors.append("角色ID须采用有效的 hero_xxx 格式并替换占位后缀")
@@ -350,6 +443,8 @@ def main():
     check_parser.add_argument("card", type=Path)
     check_parser.add_argument("--fields", type=Path, default=DEFAULT_FIELDS)
     check_parser.add_argument("--partial", action="store_true")
+    check_parser.add_argument("--preserve-layout", action="store_true", help="保留人工标题，仍检查完整字段")
+    check_parser.add_argument("--placeholder", action="append", default=[], help="用户明确指定的未定占位文本，可重复传入")
     check_parser.add_argument("--pool", type=Path, nargs="*", default=[])
     render_parser = sub.add_parser("render-notion")
     render_parser.add_argument("card", type=Path)
@@ -369,6 +464,7 @@ def main():
         result = check(
             read(args.card), read(args.fields), args.partial,
             [card_id(read(path)) for path in args.pool],
+            preserve_layout=args.preserve_layout, placeholders=args.placeholder,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 1 if result["errors"] else 0
