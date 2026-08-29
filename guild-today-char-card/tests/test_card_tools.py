@@ -13,26 +13,47 @@ sys.modules[SPEC.name] = card
 SPEC.loader.exec_module(card)
 FIELDS = (ROOT / "references/character-card-fields.md").read_text(encoding="utf-8")
 TEMPLATE = (ROOT / "assets/character-card-template.md").read_text(encoding="utf-8")
+EXAMPLE = (ROOT / "examples/character-card-example.md").read_text(encoding="utf-8")
 PUBLIC_TRAITS = "①接单前反复核对路线。<br>②遇到争执时先让别人说完。"
 
 
-def fixture():
-    required, stat_map = card.schema(FIELDS)
-    lines = []
-    for line in TEMPLATE.splitlines():
-        if line.startswith("|") and not card.separator(line):
-            cells = card.split_row(line)
-            key = cells[0]
-            if key in card.STATS:
-                value = "SS" if key == "冒险者等级" else "8"
-                cells = [key, value, *card.expected_stat(key, value, stat_map)]
-            elif key in required:
-                cells = [key, "hero_sample" if key == "角色ID" else "泛式测试内容"]
-                if key == "公开特质":
-                    cells[1] = PUBLIC_TRAITS
-            line = "| " + " | ".join(cells) + " |"
-        lines.append(line)
+def markdown_table(rows):
+    width = len(rows[0])
+    lines = ["| " + " | ".join(row) + " |" for row in rows[:1]]
+    lines.append("|" + "|".join("---" for _ in range(width)) + "|")
+    lines.extend("| " + " | ".join(row) + " |" for row in rows[1:])
     return "\n".join(lines) + "\n"
+
+
+def fixture(three_columns=False):
+    required, stat_map = card.schema(FIELDS)
+    definitions = card.field_requirements(FIELDS)
+    result, cursor = [], TEMPLATE.index("**角色名_角色卡v版本号**")
+    for table in [item for item in card.tables(TEMPLATE) if item.start >= cursor]:
+        result.append(TEMPLATE[cursor:table.start])
+        headers = list(map(card.plain, table.rows[0]))
+        if headers[0] in {"属性", "项目"}:
+            rows = [headers]
+            for original in table.rows[1:]:
+                key = card.plain(original[0])
+                value = "SS" if key == "冒险者等级" else "8"
+                rows.append([key, value, *card.expected_stat(key, value, stat_map)])
+        else:
+            rows = [["字段", "要求", "内容"]] if three_columns else [["字段", "内容"]]
+            for original in table.rows[1:]:
+                key = card.plain(original[0])
+                value = "泛式测试内容" if key in required else "暂无"
+                if key == "角色ID":
+                    value = "hero_sample"
+                if key == "公开特质":
+                    value = PUBLIC_TRAITS
+                if definitions[key] == "自动生成（非手填）":
+                    value = "按对应系统生成；等待正文确认与授权。"
+                rows.append([key, card.plain(original[1]), value] if three_columns else [key, value])
+        result.append(markdown_table(rows))
+        cursor = table.end
+    result.append(TEMPLATE[cursor:])
+    return "".join(result)
 
 
 class FieldChecks(unittest.TestCase):
@@ -49,10 +70,10 @@ class FieldChecks(unittest.TestCase):
         required, _ = card.schema(FIELDS)
         self.assertNotIn("弱线索", required)
         self.assertEqual(self.errors(self.text), [])
-        with_clue = self.text.replace("| 入会记录 |", "| 弱线索 | ①旧记录中的签名缺了一笔。<br>②每次返程都会绕开旧桥。 |\n| 入会记录 |")
+        with_clue = self.text.replace("| 弱线索 | 暂无 |", "| 弱线索 | ①旧记录中的签名缺了一笔。<br>②每次返程都会绕开旧桥。 |")
         self.assertEqual(self.errors(with_clue), [])
-        unused = self.text.replace("| 入会记录 |", "| 弱线索 | 暂无 |\n| 入会记录 |")
-        self.assertEqual(self.errors(unused), [])
+        missing = self.text.replace("| 弱线索 | 暂无 |\n", "")
+        self.assertIn("缺少正式字段：弱线索", self.errors(missing))
 
     def test_facet_count_boundaries_in_tables(self):
         for key in card.FACET_FIELDS:
@@ -139,6 +160,11 @@ class FieldChecks(unittest.TestCase):
     def test_template_is_unfilled(self):
         self.assertTrue(self.errors(TEMPLATE))
 
+    def test_complete_generic_example(self):
+        result = card.check(EXAMPLE, FIELDS)
+        self.assertEqual(result["errors"], [])
+        self.assertIn("角色弧线尚未确认", result["warnings"])
+
     def test_original_dictionary(self):
         required, values = card.schema(FIELDS)
         self.assertIn("角色ID", required)
@@ -149,7 +175,7 @@ class FieldChecks(unittest.TestCase):
             self.assertEqual(len(card.expected_stat("声望", value, values)), 2)
 
     def test_numeric_description_change(self):
-        table = next(t for t in card.tables(self.text) if t.rows[0][0] == "项目")
+        table = next(t for t in card.tables(self.text) if card.plain(t.rows[0][0]) in {"项目", "属性"})
         original = table.rows[1][3]
         self.assertTrue(any("描述与字段原文不一致" in e for e in self.errors(self.text.replace(original, "改写描述", 1))))
 
@@ -214,10 +240,10 @@ class FieldChecks(unittest.TestCase):
         self.assertEqual(self.errors(self.text.replace("| 状态 |", "| 初始状态 |")), [])
 
     def test_heading_order(self):
-        self.assertTrue(any("十模块" in e for e in self.errors(self.text.replace("## 3.基础资料", "## 4.基础资料"))))
+        self.assertTrue(any("十模块" in e for e in self.errors(self.text.replace("# 3.基础资料", "# 4.基础资料"))))
 
     def test_preserve_layout_still_requires_complete_fields(self):
-        changed = self.text.replace("## 3.基础资料", "## 基本信息")
+        changed = self.text.replace("# 3.基础资料", "# 基本信息")
         self.assertTrue(self.errors(changed))
         self.assertEqual(self.errors(changed, preserve_layout=True), [])
         missing = changed.replace("| 年龄 | 泛式测试内容 |\n", "")
@@ -230,10 +256,93 @@ class FieldChecks(unittest.TestCase):
             "--placeholder", "等待作者定值（推测）",
         ], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("内容为空", result.stdout)
+        self.assertIn("角色ID须采用", result.stdout)
 
     def test_notion_card_check(self):
         self.assertEqual(self.errors(card.render_notion(self.text)), [])
+
+    def test_template_contains_all_formal_fields_once(self):
+        definitions = card.field_requirements(FIELDS)
+        names = [row[0] for table in card.tables(TEMPLATE) for row in table.rows[1:]]
+        self.assertEqual(len(definitions), 64)
+        self.assertEqual(len(names), 64)
+        self.assertEqual(set(names), set(definitions))
+        for table in card.tables(TEMPLATE):
+            for row in table.rows[1:]:
+                if row[0] not in card.STATS:
+                    self.assertEqual(row[1], definitions[row[0]].replace("（非手填）", ""))
+
+    def test_three_column_card_and_id(self):
+        text = fixture(three_columns=True)
+        for version in (text, card.render_notion(text)):
+            self.assertEqual(self.errors(version), [])
+            self.assertEqual(card.card_id(version), "hero_sample")
+            self.assertIn("角色ID与提供的角色池重复", self.errors(version, pool=["hero_sample"]))
+
+    def test_notion_column_orders(self):
+        for headers, row in (
+            ("字段 | 要求 | 内容", "角色ID | 必填 | hero_sample"),
+            ("字段 | 内容 | 要求", "角色ID | hero_sample | 必填"),
+        ):
+            with self.subTest(headers=headers):
+                text = "| " + headers + " |\n|---|---|---|\n| " + row + " |\n"
+                for version in (text, card.render_notion(text)):
+                    self.assertEqual(self.errors(version, partial=True), [])
+                    self.assertEqual(card.card_id(version), "hero_sample")
+
+    def test_each_formal_field_is_required_in_complete_output(self):
+        text = fixture(three_columns=True)
+        required, _ = card.schema(FIELDS)
+        for key in card.field_requirements(FIELDS):
+            row = next(line for line in text.splitlines() if line.startswith("| " + key + " |"))
+            table = next(table for table in card.tables(text) if any(record[0] == key for record in table.rows[1:]))
+            if len(table.rows) == 2:
+                changed = text[:table.start] + text[table.end:]
+            else:
+                changed = text.replace(row + "\n", "")
+            prefix = "缺少必填字段：" if key in required else "缺少正式字段："
+            with self.subTest(key=key):
+                for options in ({}, {"preserve_layout": True}):
+                    self.assertIn(prefix + key, self.errors(changed, **options))
+                self.assertEqual(self.errors(changed, partial=True), [])
+
+    def test_three_column_content_cannot_be_replaced_by_requirement(self):
+        for key, requirement in (("年龄", "必填"), ("公开关系", "选填"), ("独有行为", "仅特殊角色使用"), ("程序字段", "自动生成")):
+            text = f"| 字段 | 填写要求 | 内容 |\n|---|---|---|\n| {key} | {requirement} | |\n"
+            with self.subTest(key=key):
+                self.assertIn(key + "内容为空", self.errors(text, partial=True))
+
+    def test_requirement_labels_are_checked(self):
+        text = fixture(three_columns=True)
+        for key, old, new in (("公开关系", "选填", "必填"), ("独有行为", "仅特殊角色使用", "选填"), ("程序字段", "自动生成", "必填")):
+            with self.subTest(key=key):
+                changed = text.replace(f"| {key} | {old} |", f"| {key} | {new} |")
+                self.assertIn(key + "填写要求与字段原文不一致", self.errors(changed))
+
+    def test_three_column_facets_and_unconfirmed_clue(self):
+        text = fixture(three_columns=True)
+        self.assertTrue(any("公开特质须有2—4条" in error for error in self.errors(text.replace(PUBLIC_TRAITS, "①只有一条。"))))
+        for value in ("待定", "未设定（推测）", "等待作者定值（推测）"):
+            with self.subTest(value=value):
+                changed = text.replace("| 弱线索 | 选填 | 暂无 |", f"| 弱线索 | 选填 | {value} |")
+                result = card.check(changed, FIELDS, placeholders=["等待作者定值（推测）"])
+                self.assertEqual(result["errors"], [])
+                self.assertIn("弱线索尚未确认", result["warnings"])
+
+    def test_optional_and_automatic_duplicates_are_checked(self):
+        text = fixture(three_columns=True)
+        for key in ("公开关系", "独有行为", "程序字段"):
+            row = next(line for line in text.splitlines() if line.startswith("| " + key + " |"))
+            with self.subTest(key=key):
+                self.assertIn(key + "重复出现，请核对主要定义", self.errors(text.replace(row, row + "\n" + row)))
+
+    def test_unknown_three_column_layout_is_not_silently_accepted(self):
+        text = "| 字段 | 备注 | 内容 |\n|---|---|---|\n| 角色ID | 正式 | hero_sample |\n"
+        self.assertTrue(any("格式未覆盖" in error for error in self.errors(text, partial=True)))
+
+    def test_incomplete_stat_table_reports_an_error(self):
+        text = "| 项目 |\n|---|\n| 战斗 |\n"
+        self.assertIn("战斗须包含数值、简要描述、详细描述", self.errors(text, partial=True))
 
 
 class ConversionChecks(unittest.TestCase):
@@ -241,10 +350,11 @@ class ConversionChecks(unittest.TestCase):
         self.assertEqual(card.tables("文字\n\n---\n\n正文\n"), [])
 
     def test_round_trip(self):
-        text = fixture()
-        converted = card.render_notion(text)
-        self.assertTrue(card.compare(text, converted)["equal"])
-        self.assertEqual(card.render_notion(converted), converted)
+        for three_columns in (False, True):
+            text = fixture(three_columns=three_columns)
+            converted = card.render_notion(text)
+            self.assertTrue(card.compare(text, converted)["equal"])
+            self.assertEqual(card.render_notion(converted), converted)
 
     def test_inline_content(self):
         text = "| 字段 | 内容 |\n|---|---|\n| 中文 | **文字**、`a|b`、甲\\|乙<br/>后续 &amp; 3 > 2 |\n"

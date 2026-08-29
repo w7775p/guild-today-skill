@@ -1,0 +1,12 @@
+interface:
+  display_name: guild today char card
+  short_description: 为《今日公会照常营业》设计角色，制作、修订与审查正式角色卡，并按授权发布。
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

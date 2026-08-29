@@ -164,21 +164,31 @@ def plain(value):
     return re.sub(r"\\([_*])", r"\1", value).strip()
 
 
+def field_requirements(fields_text):
+    """Return formal fields and their content requirements; exclude reference rows."""
+    kinds = {"必填", "选填", "仅特殊角色使用", "自动生成（非手填）"}
+    return {
+        row[1]: row[-1]
+        for table in tables(fields_text)
+        if table.rows[0][:2] == ["模块", "字段名"]
+        for row in table.rows[1:]
+        if len(row) == 7 and row[-1] in kinds
+    }
+
+
 def schema(fields_text):
-    required, stat_map = set(), {}
+    required = {key for key, kind in field_requirements(fields_text).items() if kind == "必填"}
+    stat_map = {}
     for table in tables(fields_text):
-        for row in table.rows[1:]:
-            if len(row) == 7 and row[-1] == "必填":
-                required.add(row[1])
         heading = list(re.finditer(
-            r"^## 4\.\d+ (.+)$", fields_text[:table.start], flags=re.M
+            r"^#{2,6}\s+(.+?)\s*$", fields_text[:table.start], flags=re.M
         ))
         if not heading:
             continue
-        name = heading[-1].group(1)
+        name = plain(heading[-1].group(1))
         if name == "声望等级":
             name = "声望"
-        if name in STATS and table.rows[0][-1] == "详细描述":
+        if name in STATS and plain(table.rows[0][-1]) == "详细描述":
             stat_map[name] = {row[0]: tuple(row[1:]) for row in table.rows[1:]}
     if not required or set(stat_map) != set(STATS):
         raise ValueError("字段快照缺少必填字段或完整数值表")
@@ -207,7 +217,7 @@ def expected_stat(name, value, stat_map):
 
 def unconfirmed(value, placeholders=()):
     value = plain(value)
-    without_marker = re.sub(r"（推测）[。.]?$", "", value).strip()
+    without_marker = re.sub(r"（推测）[。.]?$", "", value).strip().rstrip("。.")
     return without_marker in UNCONFIRMED or value in set(map(plain, placeholders))
 
 
@@ -216,7 +226,7 @@ def facet_errors(key, value, placeholders=()):
     if key not in FACET_FIELDS:
         return []
     value = re.sub(r"<br\s*/?>", "\n", plain(value), flags=re.I)
-    if key == "弱线索" and value == "暂无":
+    if key == "弱线索" and (value == "暂无" or unconfirmed(value, placeholders)):
         return []
     markers = list(re.finditer(r"[①-⑳]|^(?:\d+[.、)）]\s*|[-+*]\s+)", value, flags=re.M))
     if markers:
@@ -278,12 +288,28 @@ def prose_fields(text, parsed=None):
         yield pending, "\n".join(content)
 
 
+def field_columns(table):
+    headers = list(map(plain, table.rows[0]))
+    if headers in (["字段", "填写要求", "内容"], ["字段", "要求", "内容"]):
+        return 2, 1
+    if headers in (["字段", "内容", "填写要求"], ["字段", "内容", "要求"]):
+        return 1, 2
+    if len(headers) == 2:
+        return 1, None
+    return None, None
+
+
+def field_content_index(table):
+    return field_columns(table)[0]
+
+
 def card_id(text, parsed=None):
     parsed = tables(text) if parsed is None else parsed
     for table in parsed:
+        index = field_content_index(table)
         for row in table.rows[1:]:
-            if plain(row[0]) == "角色ID" and len(row) == 2:
-                return plain(row[1])
+            if plain(row[0]) == "角色ID" and index is not None:
+                return plain(row[index])
     for key, value in prose_fields(text, parsed):
         if key == "角色ID":
             return plain(value)
@@ -292,6 +318,7 @@ def card_id(text, parsed=None):
 
 def check(text, fields_text, partial=False, pool=(), preserve_layout=False, placeholders=()):
     required, stat_map = schema(fields_text)
+    definitions = field_requirements(fields_text)
     errors, warnings, seen = [], [], Counter()
     parsed = tables(text)
     for table in parsed:
@@ -299,21 +326,29 @@ def check(text, fields_text, partial=False, pool=(), preserve_layout=False, plac
             key = plain(row[0])
             if key == "初始状态":
                 key = "状态"
-            if key in required:
-                seen[key] += 1
-                if len(row) < 2 or not plain(row[1]):
-                    errors.append(key + "内容为空")
-                elif key not in STATS and unconfirmed(row[1], placeholders):
-                    warnings.append(key + "尚未确认")
-            if key in FACET_FIELDS:
-                if len(row) != 2:
-                    errors.append(key + "的条目数量校验仅支持两列表格，请人工核对")
-                else:
-                    errors.extend(facet_errors(key, row[1], placeholders))
+            if key not in definitions:
+                continue
+            seen[key] += 1
+            if key in STATS and len(row) != 4:
+                errors.append(key + "须包含数值、简要描述、详细描述")
+                continue
+            index = 1 if key in STATS else field_content_index(table)
+            if index is None:
+                errors.append(key + "的字段表格格式未覆盖；请使用字段／内容或含要求列的三列表格")
+                continue
+            value = row[index]
+            if not plain(value):
+                errors.append(key + "内容为空")
+            elif key not in STATS and unconfirmed(value, placeholders):
+                warnings.append(key + "尚未确认")
+            _, requirement_index = field_columns(table)
+            if requirement_index is not None:
+                kind = plain(row[requirement_index])
+                expected_kind = definitions[key]
+                if kind != expected_kind and not (kind == "自动生成" and expected_kind == "自动生成（非手填）"):
+                    errors.append(key + "填写要求与字段原文不一致")
+            errors.extend(facet_errors(key, value, placeholders))
             if key in STATS:
-                if len(row) != 4:
-                    errors.append(key + "须包含数值、简要描述、详细描述")
-                    continue
                 try:
                     expected = expected_stat(key, row[1], stat_map)
                 except ValueError as exc:
@@ -326,7 +361,7 @@ def check(text, fields_text, partial=False, pool=(), preserve_layout=False, plac
                     errors.append(key + "描述与字段原文不一致")
     # Explicit prose fields get presence checks; stat prose is not silently accepted.
     for key, value in prose_fields(text, parsed):
-        if key in required:
+        if key in definitions:
             seen[key] += 1
             if not plain(value):
                 errors.append(key + "内容为空")
@@ -339,8 +374,9 @@ def check(text, fields_text, partial=False, pool=(), preserve_layout=False, plac
         if count > 1:
             errors.append(key + "重复出现，请核对主要定义")
     if not partial:
-        for key in sorted(required - set(seen)):
-            errors.append("缺少必填字段：" + key)
+        for key in sorted(set(definitions) - set(seen)):
+            prefix = "缺少必填字段：" if key in required else "缺少正式字段："
+            errors.append(prefix + key)
     if not partial and not preserve_layout:
         headings = re.findall(r"^#{1,3} (\d+)\.\s*(.+?)\s*$", text, flags=re.M)
         expected_headings = [(str(i), title) for i, title in enumerate(MODULES, 1)]
